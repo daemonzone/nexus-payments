@@ -1,6 +1,7 @@
 package com.nexus.payments.event;
 
 import com.nexus.payments.config.RabbitConfig;
+import com.nexus.payments.service.PaymentService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
@@ -11,9 +12,16 @@ public class OrderCreatedListener {
 
     private static final Logger log = LoggerFactory.getLogger(OrderCreatedListener.class);
 
+    private final PaymentService paymentService;
+
+    public OrderCreatedListener(PaymentService paymentService) {
+        this.paymentService = paymentService;
+    }
+
     @RabbitListener(queues = RabbitConfig.ORDERS_CREATED_QUEUE)
     public void onOrderCreated(OrderCreated event) {
         log.info("Received OrderCreated event, eventId={}, orderId={}, userId={}, amount={} {}",
                 event.eventId(), event.orderId(), event.userId(), event.totalAmount(), event.currency());
+        paymentService.createPayment(event.orderId(), event.userId(), event.totalAmount(), event.currency());
     }
 }

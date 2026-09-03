@@ -1,6 +1,16 @@
 spring:
   application:
     name: nexus-payments
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payments_db}
+    username: ${DB_USERNAME:nexus}
+    password: ${DB_PASSWORD:nexus}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
     port: ${RABBITMQ_PORT:5672}
