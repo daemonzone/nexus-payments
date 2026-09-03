@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: nexus-payments
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:nexus}
+    password: ${RABBITMQ_PASSWORD:nexus}
+
+server:
+  port: 8083
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
