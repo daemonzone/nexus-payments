@@ -11,10 +11,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -32,9 +34,10 @@ class PaymentServiceTest {
     }
 
     @Test
-    void createPayment_persistsPendingPayment_withGivenOrderData() {
+    void createPayment_persistsPendingPayment_whenNoPaymentExistsForOrder() {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
+        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.empty());
         when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         paymentService.createPayment(orderId, userId, new BigDecimal("49.99"), "EUR");
@@ -49,5 +52,16 @@ class PaymentServiceTest {
         assertThat(saved.getStatus()).isEqualTo(PaymentStatus.PENDING);
         assertThat(saved.getCreatedAt()).isNotNull();
         assertThat(saved.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void createPayment_isNoOp_whenPaymentAlreadyExistsForOrder() {
+        UUID orderId = UUID.randomUUID();
+        Payment existing = new Payment(orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
+        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.of(existing));
+
+        paymentService.createPayment(orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
+
+        verify(paymentRepository, never()).save(any());
     }
 }

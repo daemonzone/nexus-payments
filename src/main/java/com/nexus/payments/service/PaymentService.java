@@ -21,8 +21,20 @@ public class PaymentService {
         this.paymentRepository = paymentRepository;
     }
 
+    /**
+     * Idempotent by orderId: a redelivered OrderCreated for an order that
+     * already has a Payment is treated as already handled and is a no-op.
+     * This is a check-then-act guard, not a race-proof lock - see the
+     * uq_payments_order_id constraint, which remains the final integrity
+     * guarantee if two deliveries are ever processed concurrently.
+     */
     @Transactional
     public void createPayment(UUID orderId, UUID userId, BigDecimal amount, String currency) {
+        if (paymentRepository.findByOrderId(orderId).isPresent()) {
+            log.info("Payment already exists for orderId={}, ignoring duplicate OrderCreated delivery", orderId);
+            return;
+        }
+
         Payment payment = new Payment(orderId, userId, amount, currency);
         Payment saved = paymentRepository.save(payment);
         log.info("Payment created, paymentId={}, orderId={}, status={}",
