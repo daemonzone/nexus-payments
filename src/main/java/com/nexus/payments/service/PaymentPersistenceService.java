@@ -8,7 +8,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -30,24 +29,27 @@ class PaymentPersistenceService {
     }
 
     /**
-     * Idempotent by orderId: a redelivered OrderCreated for an order that
-     * already has a Payment returns empty, telling the caller to treat the
-     * event as already handled. This is a check-then-act guard, not a
-     * race-proof lock - see the uq_payments_order_id constraint, which
-     * remains the final integrity guarantee if two deliveries are ever
-     * processed concurrently.
+     * Idempotent by orderId, but NOT by "a Payment row already exists":
+     * a redelivered OrderCreated for an order whose Payment already reached
+     * a terminal state (COMPLETED/FAILED) must be a no-op, but one whose
+     * Payment is still PENDING - e.g. because the provider call failed on a
+     * previous delivery attempt - must let the caller retry that call
+     * against the SAME row, not silently swallow the redelivery. Returning
+     * the existing row either way, and letting the caller branch on its
+     * status, is what makes that distinction possible. This is a
+     * check-then-act guard, not a race-proof lock - see the
+     * uq_payments_order_id constraint, which remains the final integrity
+     * guarantee if two deliveries are ever processed concurrently.
      */
     @Transactional
-    Optional<Payment> createPendingIfAbsent(UUID orderId, UUID userId, BigDecimal amount, String currency) {
-        if (paymentRepository.findByOrderId(orderId).isPresent()) {
-            return Optional.empty();
-        }
-
-        Payment payment = new Payment(orderId, userId, amount, currency);
-        Payment saved = paymentRepository.save(payment);
-        log.info("Payment created, paymentId={}, orderId={}, status={}",
-                saved.getId(), saved.getOrderId(), saved.getStatus());
-        return Optional.of(saved);
+    Payment findOrCreatePending(UUID orderId, UUID userId, BigDecimal amount, String currency) {
+        return paymentRepository.findByOrderId(orderId).orElseGet(() -> {
+            Payment payment = new Payment(orderId, userId, amount, currency);
+            Payment saved = paymentRepository.save(payment);
+            log.info("Payment created, paymentId={}, orderId={}, status={}",
+                    saved.getId(), saved.getOrderId(), saved.getStatus());
+            return saved;
+        });
     }
 
     @Transactional

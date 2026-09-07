@@ -35,19 +35,19 @@ class PaymentPersistenceServiceTest {
     }
 
     @Test
-    void createPendingIfAbsent_persistsPendingPayment_whenNoPaymentExistsForOrder() {
+    void findOrCreatePending_persistsPendingPayment_whenNoPaymentExistsForOrder() {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.empty());
         when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        Optional<Payment> created = paymentPersistenceService.createPendingIfAbsent(
+        Payment created = paymentPersistenceService.findOrCreatePending(
                 orderId, userId, new BigDecimal("49.99"), "EUR");
 
         ArgumentCaptor<Payment> captor = ArgumentCaptor.forClass(Payment.class);
         verify(paymentRepository).save(captor.capture());
         Payment saved = captor.getValue();
-        assertThat(created).contains(saved);
+        assertThat(created).isEqualTo(saved);
         assertThat(saved.getOrderId()).isEqualTo(orderId);
         assertThat(saved.getUserId()).isEqualTo(userId);
         assertThat(saved.getAmount()).isEqualByComparingTo("49.99");
@@ -56,15 +56,34 @@ class PaymentPersistenceServiceTest {
     }
 
     @Test
-    void createPendingIfAbsent_returnsEmpty_whenPaymentAlreadyExistsForOrder() {
+    void findOrCreatePending_returnsExistingRow_withoutSaving_whenPaymentAlreadyExistsForOrder() {
         UUID orderId = UUID.randomUUID();
         Payment existing = new Payment(orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
         when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.of(existing));
 
-        Optional<Payment> created = paymentPersistenceService.createPendingIfAbsent(
+        Payment found = paymentPersistenceService.findOrCreatePending(
                 orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
 
-        assertThat(created).isEmpty();
+        assertThat(found).isSameAs(existing);
+        verify(paymentRepository, never()).save(any());
+    }
+
+    @Test
+    void findOrCreatePending_returnsExistingPendingRow_regardlessOfStatus() {
+        // findOrCreatePending itself does not interpret status - it is
+        // PaymentService's job to decide what a PENDING vs terminal existing
+        // row means. This just confirms the already-COMPLETED row is
+        // returned as-is, not silently recreated or mutated.
+        UUID orderId = UUID.randomUUID();
+        Payment existing = new Payment(orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
+        existing.complete("txn-existing");
+        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.of(existing));
+
+        Payment found = paymentPersistenceService.findOrCreatePending(
+                orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
+
+        assertThat(found.getStatus()).isEqualTo(PaymentStatus.COMPLETED);
+        assertThat(found.getProviderTransactionId()).isEqualTo("txn-existing");
         verify(paymentRepository, never()).save(any());
     }
 

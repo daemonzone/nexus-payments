@@ -6,10 +6,12 @@ import com.nexus.payments.repository.PaymentRepository;
 import com.nexus.payments.service.PaymentService;
 import com.nexus.payments.support.AbstractIntegrationTest;
 import com.nexus.payments.support.TestOrdersTopologyConfig;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
 import org.springframework.amqp.core.MessageProperties;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -53,10 +55,26 @@ class OrderCreatedRetryAndDlqIT extends AbstractIntegrationTest {
     private RabbitTemplate rabbitTemplate;
 
     @Autowired
+    private RabbitAdmin rabbitAdmin;
+
+    @Autowired
     private PaymentRepository paymentRepository;
 
     @SpyBean
     private PaymentService paymentService;
+
+    @BeforeEach
+    void purgeDlq() {
+        // orders.created.dlq is on the RabbitMQ container this class shares
+        // with every other @SpringBootTest class in this module (see
+        // AbstractIntegrationTest) - a message stuck unacked when an earlier
+        // class's context is torn down can be redelivered into a later
+        // class's fresh listener container and, after its own retries are
+        // exhausted, land here first. Purging before this test sends its own
+        // message keeps the assertion below about *which* message is here
+        // meaningful, without depending on other test classes' cleanup timing.
+        rabbitAdmin.purgeQueue(RabbitConfig.ORDERS_CREATED_DLQ);
+    }
 
     // Never actually invoked in this test: the amount=0 constraint violation
     // happens while creating the PENDING payment, before the provider would

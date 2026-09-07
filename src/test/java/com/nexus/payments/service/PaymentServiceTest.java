@@ -12,7 +12,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,7 +19,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -54,8 +52,8 @@ class PaymentServiceTest {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         UUID paymentId = UUID.randomUUID();
-        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
-                .thenReturn(Optional.of(pendingPaymentWithId(paymentId, orderId, userId)));
+        when(paymentPersistenceService.findOrCreatePending(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(pendingPaymentWithId(paymentId, orderId, userId));
         when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
                 .thenReturn(PaymentProviderResult.success("txn-123"));
 
@@ -70,8 +68,8 @@ class PaymentServiceTest {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         UUID paymentId = UUID.randomUUID();
-        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
-                .thenReturn(Optional.of(pendingPaymentWithId(paymentId, orderId, userId)));
+        when(paymentPersistenceService.findOrCreatePending(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(pendingPaymentWithId(paymentId, orderId, userId));
         when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
                 .thenReturn(PaymentProviderResult.failure());
 
@@ -86,8 +84,8 @@ class PaymentServiceTest {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
         UUID paymentId = UUID.randomUUID();
-        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
-                .thenReturn(Optional.of(pendingPaymentWithId(paymentId, orderId, userId)));
+        when(paymentPersistenceService.findOrCreatePending(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(pendingPaymentWithId(paymentId, orderId, userId));
         when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
                 .thenThrow(new PaymentProviderUnavailableException("boom"));
 
@@ -99,17 +97,57 @@ class PaymentServiceTest {
     }
 
     @Test
-    void createPayment_doesNotCallProvider_whenPaymentAlreadyExistsForOrder() {
+    void createPayment_doesNotCallProvider_whenPaymentAlreadyCompletedForOrder() {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
-        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
-                .thenReturn(Optional.empty());
+        UUID paymentId = UUID.randomUUID();
+        Payment completed = pendingPaymentWithId(paymentId, orderId, userId);
+        completed.complete("txn-existing");
+        when(paymentPersistenceService.findOrCreatePending(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(completed);
 
         paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY);
 
-        verifyNoInteractions(paymentProviderClient);
+        verify(paymentProviderClient, never()).processPayment(any(), any(), any(), any());
         verify(paymentPersistenceService, never()).markCompleted(any(), any());
         verify(paymentPersistenceService, never()).markFailed(any());
+    }
+
+    @Test
+    void createPayment_doesNotCallProvider_whenPaymentAlreadyFailedForOrder() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        Payment failed = pendingPaymentWithId(paymentId, orderId, userId);
+        failed.fail();
+        when(paymentPersistenceService.findOrCreatePending(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(failed);
+
+        paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY);
+
+        verify(paymentProviderClient, never()).processPayment(any(), any(), any(), any());
+    }
+
+    @Test
+    void createPayment_retriesProviderCall_whenExistingPaymentIsStillPending() {
+        // The important case this checkpoint's manual testing surfaced: a
+        // Payment row that already exists but never reached a terminal
+        // state (e.g. the provider was unavailable on a previous RabbitMQ
+        // delivery attempt) must NOT be treated as an already-handled
+        // duplicate - the provider call must be retried against that same
+        // row.
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        when(paymentPersistenceService.findOrCreatePending(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(pendingPaymentWithId(paymentId, orderId, userId));
+        when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(PaymentProviderResult.success("txn-123"));
+
+        paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY);
+
+        verify(paymentProviderClient).processPayment(orderId, userId, AMOUNT, CURRENCY);
+        verify(paymentPersistenceService).markCompleted(paymentId, "txn-123");
     }
 
     private Payment pendingPaymentWithId(UUID paymentId, UUID orderId, UUID userId) {

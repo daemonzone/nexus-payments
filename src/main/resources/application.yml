@@ -31,6 +31,43 @@ payment:
     connect-timeout: ${PAYMENT_PROVIDER_CONNECT_TIMEOUT:2000}
     read-timeout: ${PAYMENT_PROVIDER_READ_TIMEOUT:5000}
 
+# HTTP-level resilience around the payment-provider call. This is separate
+# from, and unaware of, the RabbitMQ listener retry above: this one recovers
+# short HTTP hiccups within a single OrderCreated processing attempt; that
+# one recovers whole-message processing failures across redeliveries. See
+# README.md "HTTP resilience" section for the full picture.
+resilience4j:
+  retry:
+    instances:
+      paymentProvider:
+        max-attempts: 4
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        enable-randomized-wait: true
+        randomized-wait-factor: 0.5
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+  circuitbreaker:
+    instances:
+      paymentProvider:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 4
+        minimum-number-of-calls: 4
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        # A 4xx means OUR request was rejected (malformed/invalid) - it says
+        # nothing about the provider's health, so it must not count as
+        # evidence the provider is failing. Retry already never retries it
+        # (see retry-exceptions above); this is the equivalent guard on the
+        # circuit breaker's side, so a run of client-side bugs can't trip the
+        # breaker and block otherwise-valid requests from healthy providers.
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
+
 server:
   port: 8083
 
