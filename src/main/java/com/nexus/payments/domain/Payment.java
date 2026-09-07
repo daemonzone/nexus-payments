@@ -1,5 +1,6 @@
 package com.nexus.payments.domain;
 
+import com.nexus.payments.exception.InvalidPaymentStateTransitionException;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -39,6 +40,9 @@ public class Payment {
     @Column(nullable = false)
     private PaymentStatus status;
 
+    @Column(name = "provider_transaction_id")
+    private String providerTransactionId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -58,6 +62,23 @@ public class Payment {
         Instant now = Instant.now();
         this.createdAt = now;
         this.updatedAt = now;
+    }
+
+    public void complete(String providerTransactionId) {
+        if (status != PaymentStatus.PENDING) {
+            throw new InvalidPaymentStateTransitionException(status, PaymentStatus.COMPLETED);
+        }
+        this.status = PaymentStatus.COMPLETED;
+        this.providerTransactionId = providerTransactionId;
+        this.updatedAt = Instant.now();
+    }
+
+    public void fail() {
+        if (status != PaymentStatus.PENDING) {
+            throw new InvalidPaymentStateTransitionException(status, PaymentStatus.FAILED);
+        }
+        this.status = PaymentStatus.FAILED;
+        this.updatedAt = Instant.now();
     }
 
     public UUID getId() {
@@ -82,6 +103,10 @@ public class Payment {
 
     public PaymentStatus getStatus() {
         return status;
+    }
+
+    public String getProviderTransactionId() {
+        return providerTransactionId;
     }
 
     public Instant getCreatedAt() {

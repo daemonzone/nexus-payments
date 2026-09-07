@@ -1,67 +1,120 @@
 package com.nexus.payments.service;
 
+import com.nexus.payments.client.PaymentProviderClient;
+import com.nexus.payments.client.PaymentProviderResult;
 import com.nexus.payments.domain.Payment;
-import com.nexus.payments.domain.PaymentStatus;
-import com.nexus.payments.repository.PaymentRepository;
+import com.nexus.payments.exception.PaymentProviderUnavailableException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+/**
+ * Orchestration only: PaymentPersistenceService and PaymentProviderClient
+ * are both mocked, so these tests verify the decisions PaymentService makes
+ * (call the provider or not, mark completed/failed or not) rather than
+ * persistence or HTTP behavior, which are covered by
+ * PaymentPersistenceServiceTest and RestClientPaymentProviderClientTest.
+ */
 @ExtendWith(MockitoExtension.class)
 class PaymentServiceTest {
 
+    private static final BigDecimal AMOUNT = new BigDecimal("49.99");
+    private static final String CURRENCY = "EUR";
+
     @Mock
-    private PaymentRepository paymentRepository;
+    private PaymentPersistenceService paymentPersistenceService;
+
+    @Mock
+    private PaymentProviderClient paymentProviderClient;
 
     private PaymentService paymentService;
 
     @BeforeEach
     void setUp() {
-        paymentService = new PaymentService(paymentRepository);
+        paymentService = new PaymentService(paymentPersistenceService, paymentProviderClient);
     }
 
     @Test
-    void createPayment_persistsPendingPayment_whenNoPaymentExistsForOrder() {
+    void createPayment_marksCompleted_whenProviderSucceeds() {
         UUID orderId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
-        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.empty());
-        when(paymentRepository.save(any(Payment.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        UUID paymentId = UUID.randomUUID();
+        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(Optional.of(pendingPaymentWithId(paymentId, orderId, userId)));
+        when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(PaymentProviderResult.success("txn-123"));
 
-        paymentService.createPayment(orderId, userId, new BigDecimal("49.99"), "EUR");
+        paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY);
 
-        ArgumentCaptor<Payment> captor = ArgumentCaptor.forClass(Payment.class);
-        verify(paymentRepository).save(captor.capture());
-        Payment saved = captor.getValue();
-        assertThat(saved.getOrderId()).isEqualTo(orderId);
-        assertThat(saved.getUserId()).isEqualTo(userId);
-        assertThat(saved.getAmount()).isEqualByComparingTo("49.99");
-        assertThat(saved.getCurrency()).isEqualTo("EUR");
-        assertThat(saved.getStatus()).isEqualTo(PaymentStatus.PENDING);
-        assertThat(saved.getCreatedAt()).isNotNull();
-        assertThat(saved.getUpdatedAt()).isNotNull();
+        verify(paymentPersistenceService).markCompleted(paymentId, "txn-123");
+        verify(paymentPersistenceService, never()).markFailed(any());
     }
 
     @Test
-    void createPayment_isNoOp_whenPaymentAlreadyExistsForOrder() {
+    void createPayment_marksFailed_whenProviderDeclines() {
         UUID orderId = UUID.randomUUID();
-        Payment existing = new Payment(orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
-        when(paymentRepository.findByOrderId(orderId)).thenReturn(Optional.of(existing));
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(Optional.of(pendingPaymentWithId(paymentId, orderId, userId)));
+        when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(PaymentProviderResult.failure());
 
-        paymentService.createPayment(orderId, UUID.randomUUID(), new BigDecimal("49.99"), "EUR");
+        paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY);
 
-        verify(paymentRepository, never()).save(any());
+        verify(paymentPersistenceService).markFailed(paymentId);
+        verify(paymentPersistenceService, never()).markCompleted(any(), any());
+    }
+
+    @Test
+    void createPayment_propagatesException_andLeavesPaymentUntouched_whenProviderUnavailable() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(Optional.of(pendingPaymentWithId(paymentId, orderId, userId)));
+        when(paymentProviderClient.processPayment(orderId, userId, AMOUNT, CURRENCY))
+                .thenThrow(new PaymentProviderUnavailableException("boom"));
+
+        assertThatThrownBy(() -> paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY))
+                .isInstanceOf(PaymentProviderUnavailableException.class);
+
+        verify(paymentPersistenceService, never()).markCompleted(any(), any());
+        verify(paymentPersistenceService, never()).markFailed(any());
+    }
+
+    @Test
+    void createPayment_doesNotCallProvider_whenPaymentAlreadyExistsForOrder() {
+        UUID orderId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        when(paymentPersistenceService.createPendingIfAbsent(orderId, userId, AMOUNT, CURRENCY))
+                .thenReturn(Optional.empty());
+
+        paymentService.createPayment(orderId, userId, AMOUNT, CURRENCY);
+
+        verifyNoInteractions(paymentProviderClient);
+        verify(paymentPersistenceService, never()).markCompleted(any(), any());
+        verify(paymentPersistenceService, never()).markFailed(any());
+    }
+
+    private Payment pendingPaymentWithId(UUID paymentId, UUID orderId, UUID userId) {
+        Payment payment = new Payment(orderId, userId, AMOUNT, CURRENCY);
+        ReflectionTestUtils.setField(payment, "id", paymentId);
+        return payment;
     }
 }

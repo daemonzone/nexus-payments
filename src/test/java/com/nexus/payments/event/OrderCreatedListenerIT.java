@@ -1,8 +1,11 @@
 package com.nexus.payments.event;
 
+import com.nexus.payments.client.PaymentProviderClient;
+import com.nexus.payments.client.PaymentProviderResult;
 import com.nexus.payments.config.RabbitConfig;
 import com.nexus.payments.support.AbstractIntegrationTest;
 import com.nexus.payments.support.TestOrdersTopologyConfig;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageBuilder;
@@ -10,6 +13,7 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
@@ -19,8 +23,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * End-to-end proof that a message published exactly as nexus-orders
@@ -43,6 +49,23 @@ class OrderCreatedListenerIT extends AbstractIntegrationTest {
 
     @SpyBean
     private OrderCreatedListener listener;
+
+    @MockBean
+    private PaymentProviderClient paymentProviderClient;
+
+    @BeforeEach
+    void stubProviderSuccess() {
+        // This class only asserts deserialization of the incoming event; the
+        // provider call it triggers as a side effect is stubbed out so the
+        // test doesn't depend on (or slow down waiting for) a real provider.
+        // A fresh id per invocation: provider_transaction_id is unique, and
+        // the Postgres container backing these tests (see
+        // AbstractIntegrationTest) is a singleton shared by every
+        // @SpringBootTest class in this module, so a fixed literal here
+        // would collide with the same literal used in another test class.
+        when(paymentProviderClient.processPayment(any(), any(), any(), any()))
+                .thenReturn(PaymentProviderResult.success(UUID.randomUUID().toString()));
+    }
 
     @Test
     void listener_receivesAndDeserializesEvent_publishedWithProducersTypeId() {

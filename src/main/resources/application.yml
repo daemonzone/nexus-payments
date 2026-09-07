@@ -25,6 +25,12 @@ spring:
           multiplier: 2.0
           max-interval: 10000ms
 
+payment:
+  provider:
+    base-url: ${PAYMENT_PROVIDER_BASE_URL:http://localhost:8084}
+    connect-timeout: ${PAYMENT_PROVIDER_CONNECT_TIMEOUT:2000}
+    read-timeout: ${PAYMENT_PROVIDER_READ_TIMEOUT:5000}
+
 server:
   port: 8083
 

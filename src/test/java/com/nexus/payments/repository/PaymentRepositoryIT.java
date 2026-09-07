@@ -38,8 +38,35 @@ class PaymentRepositoryIT extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.get().getAmount()).isEqualByComparingTo("49.99");
         assertThat(reloaded.get().getCurrency()).isEqualTo("EUR");
         assertThat(reloaded.get().getStatus()).isEqualTo(PaymentStatus.PENDING);
+        assertThat(reloaded.get().getProviderTransactionId()).isNull();
         assertThat(reloaded.get().getCreatedAt()).isNotNull();
         assertThat(reloaded.get().getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void completingPayment_persistsProviderTransactionId() {
+        Payment payment = new Payment(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00"), "USD");
+        payment.complete("txn-123");
+
+        Payment saved = paymentRepository.saveAndFlush(payment);
+
+        Optional<Payment> reloaded = paymentRepository.findById(saved.getId());
+        assertThat(reloaded).isPresent();
+        assertThat(reloaded.get().getStatus()).isEqualTo(PaymentStatus.COMPLETED);
+        assertThat(reloaded.get().getProviderTransactionId()).isEqualTo("txn-123");
+    }
+
+    @Test
+    void duplicateProviderTransactionId_violatesUniqueConstraint() {
+        Payment first = new Payment(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("10.00"), "USD");
+        first.complete("txn-shared");
+        paymentRepository.saveAndFlush(first);
+
+        Payment second = new Payment(UUID.randomUUID(), UUID.randomUUID(), new BigDecimal("20.00"), "USD");
+        second.complete("txn-shared");
+
+        assertThatThrownBy(() -> paymentRepository.saveAndFlush(second))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

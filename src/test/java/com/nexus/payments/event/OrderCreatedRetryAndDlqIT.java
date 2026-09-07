@@ -1,5 +1,6 @@
 package com.nexus.payments.event;
 
+import com.nexus.payments.client.PaymentProviderClient;
 import com.nexus.payments.config.RabbitConfig;
 import com.nexus.payments.repository.PaymentRepository;
 import com.nexus.payments.service.PaymentService;
@@ -12,6 +13,7 @@ import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
@@ -55,6 +57,15 @@ class OrderCreatedRetryAndDlqIT extends AbstractIntegrationTest {
 
     @SpyBean
     private PaymentService paymentService;
+
+    // Never actually invoked in this test: the amount=0 constraint violation
+    // happens while creating the PENDING payment, before the provider would
+    // be called. Still required so the context has a PaymentProviderClient
+    // bean instead of the real HTTP-backed one, which would otherwise
+    // attempt to reach an unavailable http://localhost:8084 if this test is
+    // ever changed to reach that code path.
+    @MockBean
+    private PaymentProviderClient paymentProviderClient;
 
     @Test
     void invalidEvent_isRetriedThreeTimesThenDeadLettered() {
